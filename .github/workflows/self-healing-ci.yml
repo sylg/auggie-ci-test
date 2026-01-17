@@ -198,6 +198,9 @@ jobs:
           git config user.name "Auggie Bot"
           git config user.email "auggie@augmentcode.com"
 
+          # Checkout the actual branch (we're in detached HEAD from the SHA checkout)
+          git checkout -B "${{ github.event.workflow_run.head_branch }}"
+
           git add -A
           git commit -m "fix: auto-fix ${{ needs.analyze.outputs.failure_type }}
 
@@ -206,7 +209,7 @@ jobs:
           Root cause: ${{ needs.analyze.outputs.root_cause }}
           File: ${{ needs.analyze.outputs.file_path }}"
 
-          git push
+          git push origin "${{ github.event.workflow_run.head_branch }}"
 
       - name: Post success comment
         if: steps.fix.outputs.fixed == 'true' && steps.verify.outputs.verified == 'true'
