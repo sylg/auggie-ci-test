@@ -6,7 +6,7 @@
 /**
  * Adds two numbers together.
  */
-export function add(a: number, b: number): number {
+export function add(a: number, b: number): string {
   return a + b;
 }
 
