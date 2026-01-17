@@ -1,11 +1,25 @@
 ---
-description: Analyze repository and generate optimized CI commands
+description: Analyze repository and generate CI config for failure analysis and auto-healing
 argument-hint: [--output-dir path]
 ---
 
-# Repository Analyzer
+# Repository Analyzer (CI Healing Focus)
 
-Analyze the current repository to understand its tech stack, testing patterns, and common failure modes. Output a configuration that can be used to generate optimized CI commands.
+Analyze the current repository to understand its tech stack, testing patterns, CI layout, and safety boundaries. Output a configuration that enables robust CI failure analysis and safe auto-healing (including commit/PR automation).
+
+## Objectives
+
+- Prefer concrete evidence from repo files over assumptions.
+- Capture CI context (workflows, jobs, services, env, required checks).
+- Define safe auto-fix boundaries and verification commands.
+- Enable consistent commit and PR generation.
+- Output a stable, machine-readable config with confidence notes.
+
+## Constraints
+
+- Use local repository data only (no external network calls).
+- If information is missing, set `null` and add a short note under `notes`.
+- Do not run destructive operations or modify files during analysis.
 
 ## Analysis Steps
 
@@ -18,6 +32,8 @@ Examine the repository to identify:
 - Check for `requirements.txt` / `pyproject.toml` (Python)
 - Check for `go.mod` (Go)
 - Check for `Cargo.toml` (Rust)
+- Detect Node/Python/Go/Rust versions from `.nvmrc`, `.tool-versions`, `.python-version`, `go.mod`, `rust-toolchain*`
+- Detect monorepo/workspaces (`pnpm-workspace.yaml`, `lerna.json`, `turbo.json`, `nx.json`)
 
 **Language & Framework:**
 - TypeScript vs JavaScript (check `tsconfig.json`)
@@ -39,15 +55,49 @@ Examine the repository to identify:
 - GitLab CI (`.gitlab-ci.yml`)
 - Other CI systems
 
-### 2. Analyze Project Structure
+### 2. Extract Commands and Scripts
+
+Identify authoritative commands from repo config (do not guess):
+- `package.json` scripts (including workspace packages if monorepo)
+- `Makefile`, `tox.ini`, `noxfile.py`, `poetry` scripts
+- `go test` targets, `cargo test` profiles
+- Any CI workflow steps that override scripts
+
+Capture:
+- install command
+- build, typecheck, lint, test, test:coverage
+- single-test selector (e.g., `jest -t`, `vitest -t`, `pytest -k`, `go test ./pkg -run`)
+- test environment setup (db migrations, fixtures)
+
+### 3. Analyze Project Structure
 
 Identify patterns:
 - Where are tests located? (`__tests__/`, `*.test.ts`, `tests/`)
 - Where is source code? (`src/`, `lib/`, `app/`)
 - Are there E2E tests? (`e2e/`, `cypress/`, `playwright/`)
 - Database/ORM used? (Prisma, TypeORM, Sequelize)
+- Are there generated code or build artifacts to avoid touching?
 
-### 3. Identify Common Failure Patterns
+### 4. Inspect CI Configuration
+
+From CI config files, extract:
+- Workflow names, job names, and primary steps
+- Matrix builds (OS, Node/Python versions)
+- Services (db, redis) and required env vars
+- Caches and artifacts (paths, keys)
+- Required checks (by job name if documented)
+- Default branch (`main`/`master`) if specified
+
+### 5. Identify Conventions and Guardrails
+
+Look for:
+- Commit message style (`commitlint`, `semantic-release`, `CONTRIBUTING`)
+- Branch naming rules
+- PR template (`.github/pull_request_template.md`)
+- CODEOWNERS (for reviewers)
+- Files/paths that should never be auto-edited (infra, migrations, workflows)
+
+### 6. Identify Common Failure Patterns
 
 Based on the tech stack, list likely failure types:
 
@@ -93,6 +143,8 @@ Generate a YAML configuration file:
 project:
   name: [detected from package.json or directory]
   type: [web-app|api|library|cli|monorepo]
+  root: .
+  monorepo: true|false
 
 tech_stack:
   language: typescript
@@ -101,20 +153,35 @@ tech_stack:
   runtime_version: "20"
   framework: next.js
   framework_version: "14.x"
+  package_manager: npm|yarn|pnpm|pip|poetry|go|cargo
 
-build:
+commands:
   install: npm ci
   build: npm run build
   typecheck: npm run typecheck
   lint: npm run lint
   test: npm test
   test_coverage: npm run test:coverage
+  test_single: npm test -- [pattern]
 
 structure:
   source: src/
   tests: src/**/__tests__/
   e2e: e2e/
   config: ./
+
+ci:
+  provider: github-actions
+  workflows:
+    - name: ci
+      path: .github/workflows/ci.yml
+      jobs: [lint, test, build]
+  matrix:
+    os: [ubuntu-latest]
+    runtime: ["20"]
+  services: [postgres, redis]
+  required_checks: [lint, test, build]
+  default_branch: main
 
 failure_patterns:
   type_error:
@@ -145,13 +212,61 @@ failure_patterns:
     risk: medium
     verification: npm run build
 
-ci_commands:
-  verify_all: npm run typecheck && npm run lint && npm test && npm run build
-  quick_check: npm run typecheck && npm run lint
+  dependency_issue:
+    patterns:
+      - "ERESOLVE"
+      - "Could not resolve dependency"
+    risk: high
+    verification: null
+
+verification:
+  quick: npm run typecheck && npm run lint
+  full: npm run typecheck && npm run lint && npm test && npm run build
+
+safety:
+  protected_paths:
+    - .github/workflows/
+    - infra/
+    - migrations/
+  max_patch_lines: 200
+  avoid_file_globs:
+    - "**/*.lock"
+  risk_overrides:
+    high: [dependency_issue, infrastructure, flaky_test]
+    low: [lint_error, type_error, import_error]
 
 conventions:
   commit_style: conventional  # or: none, angular, etc.
   branch_pattern: "feature/*|fix/*|chore/*"
+  pr_template: .github/pull_request_template.md
+  codeowners: .github/CODEOWNERS
+
+automation:
+  branch_prefix: "ci-heal/"
+  commit_message_template: "fix(ci): <short summary>"
+  pr_title_template: "CI heal: <short summary>"
+  pr_body_template: |
+    ## Root cause
+    <one sentence>
+
+    ## Fix
+    <what changed and why>
+
+    ## Verification
+    <commands run or not run and why>
+  labels: [ci, auto-fix]
+  reviewers: []
+  change_policy:
+    minimal_diff: true
+    allow_refactor: false
+    update_snapshots: false
+    update_lockfiles: "only-if-required"
+
+notes:
+  - "Set any unknown fields to null and add a brief note here."
+evidence:
+  runtime_version: ".nvmrc"
+  test_command: "package.json scripts.test"
 ```
 
 ### 5. Generate Custom Commands (Optional)
@@ -160,6 +275,8 @@ If `--generate-commands` flag is passed, create customized command files:
 
 - `.augment/commands/ci-heal.md` - Customized with repo-specific patterns
 - `.augment/commands/ci-analyze.md` - Customized error detection
+
+When customizing, include repo-specific commit/PR conventions and safety rules so the healer can generate a branch, commit, and PR with minimal review overhead.
 
 ## Usage
 
