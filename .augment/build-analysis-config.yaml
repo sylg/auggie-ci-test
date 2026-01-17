@@ -1,0 +1,71 @@
+# Build Failure Analysis Configuration
+# Controls auto-fix behavior and safety limits
+
+auto_fix:
+  enabled: true
+
+  # Safety limits
+  limits:
+    max_files_changed: 3
+    max_lines_changed: 50
+    max_attempts_per_commit: 2
+    min_confidence: 0.8
+
+  # Paths that should never be auto-fixed
+  protected_paths:
+    - "src/core/**"
+    - "src/security/**"
+    - "*.config.*"
+    - ".github/**"
+
+  # Failure types allowed for auto-fix
+  allowed_categories:
+    - lint_error
+    - type_error
+    - import_error
+    - snapshot_update
+
+  # Categories that need human review
+  review_required:
+    - test_failure
+    - compilation_error
+    - dependency_issue
+
+  # Categories that should only be reported
+  report_only:
+    - infrastructure
+    - flaky_test
+    - security
+
+# Team routing for failures
+routing:
+  infrastructure:
+    slack_channel: "#platform-alerts"
+    owners: ["@platform-team"]
+    patterns:
+      - "out of memory"
+      - "disk space"
+      - "connection refused"
+      - "timeout"
+      - "rate limit"
+
+  code:
+    default_owner: "pr-author"
+    escalation: ["@tech-lead"]
+
+  flaky_tests:
+    slack_channel: "#test-infra"
+    owners: ["@test-platform"]
+    auto_quarantine: true
+    quarantine_after_failures: 3
+
+# Notification settings
+notifications:
+  slack:
+    enabled: false  # Set to true and add webhook
+    webhook_url_secret: "SLACK_BUILD_WEBHOOK"
+
+  github:
+    enabled: true
+    post_analysis_comment: true
+    post_fix_comment: true
