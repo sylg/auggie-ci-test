@@ -56,15 +56,39 @@ jobs:
           cat /tmp/failed-logs.txt | auggie --print "
           Analyze this CI build failure.
 
-          Provide a structured analysis:
-          1. **Failure Type**: (test_failure | type_error | lint_error | compilation_error | dependency_issue | infrastructure | flaky_test)
-          2. **Root Cause**: Clear explanation of why the build failed
-          3. **Failing File**: Path and line number if applicable
-          4. **Is Auto-Fixable**: Yes/No and why
-          5. **Suggested Fix**: Code diff or steps to fix
+          IMPORTANT: Output ONLY your final analysis in clean markdown format.
+          Do NOT include tool calls, intermediate steps, or debugging output.
+          Do NOT include ANSI color codes or emoji indicators for tools.
+
+          Provide a structured analysis with these sections:
+
+          ### Failure Type
+          One of: test_failure | type_error | lint_error | compilation_error | dependency_issue | infrastructure | flaky_test
+
+          ### Root Cause
+          Clear explanation of why the build failed.
+
+          ### Failing File
+          Path and line number if applicable.
+
+          ### Auto-Fixable
+          Yes or No, with brief explanation.
+
+          ### Suggested Fix
+          Code diff or steps to fix the issue.
 
           Be specific and reference actual file paths and line numbers from the logs.
-          " > /tmp/analysis.md
+          " 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > /tmp/analysis-raw.md
+
+          # Extract only the final analysis (after last tool result or from start if no tools)
+          # Look for the structured headers and extract from there
+          if grep -q "### Failure Type" /tmp/analysis-raw.md; then
+            # Extract from the first "### Failure Type" to end
+            sed -n '/### Failure Type/,$p' /tmp/analysis-raw.md > /tmp/analysis.md
+          else
+            # Fallback: just use the cleaned output
+            cp /tmp/analysis-raw.md /tmp/analysis.md
+          fi
 
           echo "analysis_complete=true" >> $GITHUB_OUTPUT
         env:
