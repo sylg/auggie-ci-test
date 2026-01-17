@@ -161,8 +161,8 @@ jobs:
       - name: Apply fix with Auggie
         id: fix
         run: |
-          # Use Auggie to fix the issue (interactive mode to apply changes)
-          cat /tmp/failed-logs.txt | auggie "
+          # Use Auggie in print mode (non-interactive for CI)
+          cat /tmp/failed-logs.txt | auggie --print "
           Fix this CI failure. The failure type is: ${{ needs.analyze.outputs.failure_type }}
           The root cause is: ${{ needs.analyze.outputs.root_cause }}
           The failing file is: ${{ needs.analyze.outputs.file_path }}
@@ -283,7 +283,7 @@ jobs:
 
       - name: Apply fix with Auggie
         run: |
-          cat /tmp/failed-logs.txt | auggie "
+          cat /tmp/failed-logs.txt | auggie --print "
           Fix this CI failure. The failure type is: ${{ needs.analyze.outputs.failure_type }}
           The root cause is: ${{ needs.analyze.outputs.root_cause }}
           Apply the fix directly to the files.
