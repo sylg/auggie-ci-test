@@ -6,8 +6,8 @@
 /**
  * Adds two numbers together.
  */
-export function add(a: number, b: number): number {
-  return a + b;
+export function add(a: number, b: number): string {
+  return a + b;  // BUG: returns number but declared as string
 }
 
 /**
