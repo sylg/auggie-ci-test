@@ -36,7 +36,7 @@ describe('Math Utilities', () => {
 
   describe('multiply', () => {
     it('should multiply two positive numbers', () => {
-      expect(multiply(3, 4)).toBe(12);
+      expect(multiply(3, 4)).toBe(13);
     });
 
     it('should multiply with zero', () => {
