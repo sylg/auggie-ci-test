@@ -8,6 +8,11 @@ on:
     workflows: ["CI"]
     types: [completed]
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 jobs:
   analyze-failure:
     # Only run if CI failed and it was triggered by a PR
