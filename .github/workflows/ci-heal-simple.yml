@@ -57,7 +57,27 @@ jobs:
         id: heal
         run: |
           # Run the /ci-heal command - all logic is in the command
-          cat /tmp/failed-logs.txt | auggie --print "/ci-heal" 2>&1 | tee /tmp/heal-output.md
+          cat /tmp/failed-logs.txt | auggie --print "/ci-heal" 2>&1 | tee /tmp/heal-raw.txt
+
+          # Clean the output: strip ANSI codes and extract summary
+          # Remove ANSI escape codes
+          sed 's/\x1b\[[0-9;]*m//g' /tmp/heal-raw.txt > /tmp/heal-clean.txt
+
+          # Extract just the CI Heal Results section (or last meaningful block)
+          # Look for "## CI Heal Results" or similar summary markers
+          if grep -q "## CI Heal Results" /tmp/heal-clean.txt; then
+            sed -n '/## CI Heal Results/,$p' /tmp/heal-clean.txt > /tmp/heal-output.md
+          elif grep -q "Status:" /tmp/heal-clean.txt; then
+            # Fallback: extract from Status onwards
+            grep -A 100 "Status:" /tmp/heal-clean.txt | head -50 > /tmp/heal-output.md
+          else
+            # Last resort: take last 30 lines, skip tool call noise
+            grep -v "^Tool call:" /tmp/heal-clean.txt | \
+            grep -v "^Tool result:" /tmp/heal-clean.txt | \
+            grep -v "^Task Changes" /tmp/heal-clean.txt | \
+            grep -v "^Updated Tasks" /tmp/heal-clean.txt | \
+            tail -30 > /tmp/heal-output.md
+          fi
 
           # Check if files were changed
           if git diff --quiet; then

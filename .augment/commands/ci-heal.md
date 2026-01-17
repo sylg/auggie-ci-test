@@ -117,3 +117,9 @@ Output a summary:
 3. **Verify before declaring success** - run the verification command
 4. **Minimal changes only** - don't refactor, don't add features
 5. **When uncertain, escalate risk** - better to flag for review than break things
+
+## Output Format
+
+**CRITICAL**: Your final output MUST be a clean markdown summary starting with `## CI Heal Results`.
+Do NOT include any tool call logs, task updates, or internal processing in the output.
+The summary should be suitable for posting as a GitHub PR comment.
