@@ -43,12 +43,18 @@ structure:
 # Risk overrides - customize what's auto-fixable for YOUR project
 # These patterns override the default risk classification
 risk_overrides:
-  # Patterns that should ALWAYS be treated as low risk (auto-fix)
+  # Patterns that should ALWAYS be treated as low risk (auto-fix directly)
   low_risk:
     - "TS2322"  # Type assignment errors
     - "TS2339"  # Property does not exist
     - "TS2345"  # Argument type mismatch
     - "no-unused-vars"  # ESLint unused vars
+
+  # Patterns that should be treated as medium risk (create separate PR for review)
+  medium_risk:
+    - "Expected"          # Test assertion failures - need human review
+    - "toBe"              # Jest matcher failures
+    - "test_failure"      # Any test failure
 
   # Patterns that should ALWAYS be treated as high risk (never auto-fix)
   high_risk:

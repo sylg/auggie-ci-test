@@ -73,11 +73,13 @@ jobs:
             \"suggested_fix\": \"description of how to fix it\"
           }
 
-          Classification rules:
-          - type_error, lint_error, import errors with clear fixes = low risk, auto-fixable
-          - test_failure with assertion mismatch = medium risk, auto-fixable
+          Classification rules (FOLLOW EXACTLY):
+          - type_error (TS2322, etc), lint_error, import errors = low risk, auto-fixable
+          - test_failure (ANY test failure, assertion mismatch, Expected/Received) = ALWAYS medium risk, auto-fixable
           - compilation_error, dependency_issue = medium risk, may be auto-fixable
-          - infrastructure, flaky_test = high risk, not auto-fixable
+          - infrastructure, flaky_test, network errors = high risk, not auto-fixable
+
+          IMPORTANT: All test failures MUST be classified as medium risk, never low.
 
           IMPORTANT: Output ONLY the JSON object. No markdown code fences. No explanation.
           " > /tmp/auggie-output.json
