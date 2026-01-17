@@ -13,8 +13,8 @@ export function add(a: number, b: number): number {
 /**
  * Subtracts b from a.
  */
-export function subtract(a: number, b: number): string {
-  return a - b;  // BUG: returns number but typed as string
+export function subtract(a: number, b: number): number {
+  return a - b;
 }
 
 /**
