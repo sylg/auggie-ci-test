@@ -1,6 +1,5 @@
 # Self-Healing CI with Auggie CLI
-# DISABLED FOR NOW - Using build-failure-analysis.yml instead
-# This workflow would automatically fix safe issues and create PRs for others
+# Level 3: Automatically fix safe issues and create PRs for others
 
 name: Self-Healing CI
 
@@ -9,11 +8,333 @@ on:
     workflows: ["CI"]
     types: [completed]
 
-# Disabled - the Build Failure Analysis workflow handles reporting
-# Enable this later when auto-fix is needed
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
 jobs:
-  placeholder:
-    if: false  # Disabled
+  analyze:
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
+    outputs:
+      failure_type: ${{ steps.analyze.outputs.failure_type }}
+      is_auto_fixable: ${{ steps.analyze.outputs.is_auto_fixable }}
+      risk_level: ${{ steps.analyze.outputs.risk_level }}
+      pr_number: ${{ steps.pr.outputs.number }}
+      root_cause: ${{ steps.analyze.outputs.root_cause }}
+      file_path: ${{ steps.analyze.outputs.file_path }}
+      suggested_fix: ${{ steps.analyze.outputs.suggested_fix }}
+
     steps:
-      - run: echo "Self-healing CI is disabled"
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Auggie CLI
+        run: npm install -g @augmentcode/auggie
+
+      - name: Get PR number
+        id: pr
+        run: |
+          PR_NUMBER=$(gh pr list --head "${{ github.event.workflow_run.head_branch }}" --json number -q '.[0].number')
+          echo "number=$PR_NUMBER" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get failed logs
+        run: |
+          gh run view ${{ github.event.workflow_run.id }} --log-failed > /tmp/failed-logs.txt 2>&1 || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Analyze failure with structured output
+        id: analyze
+        run: |
+          # Use Auggie's structured JSON output
+          cat /tmp/failed-logs.txt | auggie --print --output-format json "
+          Analyze this CI failure and respond with a JSON object containing:
+          {
+            \"failure_type\": \"test_failure|type_error|lint_error|compilation_error|dependency_issue|infrastructure|flaky_test\",
+            \"is_auto_fixable\": true or false,
+            \"risk_level\": \"low|medium|high\",
+            \"root_cause\": \"brief description of why it failed\",
+            \"file_path\": \"path/to/failing/file.ts or null\",
+            \"line_number\": number or null,
+            \"suggested_fix\": \"description of how to fix it\"
+          }
+
+          Classification rules:
+          - type_error, lint_error, import errors with clear fixes = low risk, auto-fixable
+          - test_failure with assertion mismatch = medium risk, auto-fixable
+          - compilation_error, dependency_issue = medium risk, may be auto-fixable
+          - infrastructure, flaky_test = high risk, not auto-fixable
+          " > /tmp/analysis.json
+
+          # Debug: show raw output
+          echo "Raw analysis output:"
+          cat /tmp/analysis.json
+
+          # Parse the JSON output
+          FAILURE_TYPE=$(jq -r '.failure_type // "unknown"' /tmp/analysis.json)
+          IS_AUTO_FIXABLE=$(jq -r '.is_auto_fixable // false' /tmp/analysis.json)
+          RISK_LEVEL=$(jq -r '.risk_level // "high"' /tmp/analysis.json)
+          ROOT_CAUSE=$(jq -r '.root_cause // "Unknown"' /tmp/analysis.json)
+          FILE_PATH=$(jq -r '.file_path // ""' /tmp/analysis.json)
+          SUGGESTED_FIX=$(jq -r '.suggested_fix // ""' /tmp/analysis.json)
+
+          echo "failure_type=$FAILURE_TYPE" >> $GITHUB_OUTPUT
+          echo "is_auto_fixable=$IS_AUTO_FIXABLE" >> $GITHUB_OUTPUT
+          echo "risk_level=$RISK_LEVEL" >> $GITHUB_OUTPUT
+          echo "root_cause=$ROOT_CAUSE" >> $GITHUB_OUTPUT
+          echo "file_path=$FILE_PATH" >> $GITHUB_OUTPUT
+          echo "suggested_fix=$SUGGESTED_FIX" >> $GITHUB_OUTPUT
+
+          echo "Analysis complete: type=$FAILURE_TYPE, fixable=$IS_AUTO_FIXABLE, risk=$RISK_LEVEL"
+        env:
+          AUGMENT_SESSION_AUTH: ${{ secrets.AUGMENT_SESSION_AUTH }}
+
+  auto-fix:
+    needs: analyze
+    if: |
+      needs.analyze.outputs.is_auto_fixable == 'true' &&
+      needs.analyze.outputs.risk_level == 'low'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Auggie CLI
+        run: npm install -g @augmentcode/auggie
+
+      - name: Get failed logs
+        run: |
+          gh run view ${{ github.event.workflow_run.id }} --log-failed > /tmp/failed-logs.txt 2>&1 || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply fix with Auggie
+        id: fix
+        run: |
+          # Use Auggie to fix the issue (interactive mode to apply changes)
+          cat /tmp/failed-logs.txt | auggie "
+          Fix this CI failure. The failure type is: ${{ needs.analyze.outputs.failure_type }}
+          The root cause is: ${{ needs.analyze.outputs.root_cause }}
+          The failing file is: ${{ needs.analyze.outputs.file_path }}
+
+          Apply the fix directly to the files. Only fix what's broken.
+          Keep changes minimal and focused. Do not add comments about the fix.
+          "
+
+          # Check if any files were changed
+          if git diff --quiet; then
+            echo "fixed=false" >> $GITHUB_OUTPUT
+            echo "No changes were made"
+          else
+            echo "fixed=true" >> $GITHUB_OUTPUT
+            echo "Changes detected:"
+            git diff --stat
+          fi
+        env:
+          AUGMENT_SESSION_AUTH: ${{ secrets.AUGMENT_SESSION_AUTH }}
+
+      - name: Verify fix
+        if: steps.fix.outputs.fixed == 'true'
+        id: verify
+        run: |
+          # Run the checks to verify the fix works
+          npm run typecheck && npm run lint && npm test && npm run build
+          echo "verified=true" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Commit and push fix
+        if: steps.fix.outputs.fixed == 'true' && steps.verify.outputs.verified == 'true'
+        run: |
+          git config user.name "Auggie Bot"
+          git config user.email "auggie@augmentcode.com"
+
+          git add -A
+          git commit -m "fix: auto-fix ${{ needs.analyze.outputs.failure_type }}
+
+          Applied by Auggie CLI self-healing CI.
+
+          Root cause: ${{ needs.analyze.outputs.root_cause }}
+          File: ${{ needs.analyze.outputs.file_path }}"
+
+          git push
+
+      - name: Post success comment
+        if: steps.fix.outputs.fixed == 'true' && steps.verify.outputs.verified == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ needs.analyze.outputs.pr_number }},
+              body: `## ✅ Auto-Fix Applied
+
+              **Failure type:** \`${{ needs.analyze.outputs.failure_type }}\`
+              **Risk level:** \`${{ needs.analyze.outputs.risk_level }}\`
+              **Root cause:** ${{ needs.analyze.outputs.root_cause }}
+
+              The fix has been automatically applied and verified. CI should re-run shortly.
+
+              ---
+              *Fixed by [Auggie CLI](https://augmentcode.com) self-healing CI*`
+            });
+
+      - name: Post failure comment
+        if: steps.fix.outputs.fixed == 'true' && steps.verify.outputs.verified != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ needs.analyze.outputs.pr_number }},
+              body: `## ⚠️ Auto-Fix Attempted But Failed Verification
+
+              **Failure type:** \`${{ needs.analyze.outputs.failure_type }}\`
+              **Root cause:** ${{ needs.analyze.outputs.root_cause }}
+
+              Auggie attempted to fix the issue but the fix didn't pass verification.
+              Manual intervention required.
+
+              ---
+              *Attempted by [Auggie CLI](https://augmentcode.com) self-healing CI*`
+            });
+
+  create-fix-pr:
+    needs: analyze
+    if: |
+      needs.analyze.outputs.is_auto_fixable == 'true' &&
+      needs.analyze.outputs.risk_level == 'medium'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Auggie CLI
+        run: npm install -g @augmentcode/auggie
+
+      - name: Get failed logs
+        run: |
+          gh run view ${{ github.event.workflow_run.id }} --log-failed > /tmp/failed-logs.txt 2>&1 || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply fix with Auggie
+        run: |
+          cat /tmp/failed-logs.txt | auggie "
+          Fix this CI failure. The failure type is: ${{ needs.analyze.outputs.failure_type }}
+          The root cause is: ${{ needs.analyze.outputs.root_cause }}
+          Apply the fix directly to the files.
+          "
+        env:
+          AUGMENT_SESSION_AUTH: ${{ secrets.AUGMENT_SESSION_AUTH }}
+
+      - name: Create fix branch and PR
+        run: |
+          # Check if there are changes
+          if git diff --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git config user.name "Auggie Bot"
+          git config user.email "auggie@augmentcode.com"
+
+          BRANCH_NAME="auggie-fix/${{ github.event.workflow_run.head_branch }}-$(date +%s)"
+          git checkout -b "$BRANCH_NAME"
+
+          git add -A
+          git commit -m "fix: suggested fix for ${{ needs.analyze.outputs.failure_type }}"
+          git push -u origin "$BRANCH_NAME"
+
+          # Create PR
+          gh pr create \
+            --title "🔧 Suggested fix: ${{ needs.analyze.outputs.failure_type }}" \
+            --body "## Suggested Fix
+
+          This PR contains a suggested fix for the CI failure in #${{ needs.analyze.outputs.pr_number }}.
+
+          **Failure type:** \`${{ needs.analyze.outputs.failure_type }}\`
+          **Risk level:** \`${{ needs.analyze.outputs.risk_level }}\`
+          **Root cause:** ${{ needs.analyze.outputs.root_cause }}
+
+          Please review the changes before merging.
+
+          ---
+          *Suggested by [Auggie CLI](https://augmentcode.com)*" \
+            --base "${{ github.event.workflow_run.head_branch }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  report-only:
+    needs: analyze
+    if: |
+      needs.analyze.outputs.is_auto_fixable == 'false' ||
+      needs.analyze.outputs.risk_level == 'high'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Post analysis comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ needs.analyze.outputs.pr_number }},
+              body: `## 🔍 Build Failure Analysis (Manual Fix Required)
+
+              **Failure type:** \`${{ needs.analyze.outputs.failure_type }}\`
+              **Risk level:** \`${{ needs.analyze.outputs.risk_level }}\`
+              **Auto-fixable:** No
+
+              ### Root Cause
+              ${{ needs.analyze.outputs.root_cause }}
+
+              ${{ needs.analyze.outputs.file_path && format('**File:** `{0}`', needs.analyze.outputs.file_path) || '' }}
+
+              ### Suggested Fix
+              ${{ needs.analyze.outputs.suggested_fix }}
+
+              ---
+              *This issue requires manual review. Analyzed by [Auggie CLI](https://augmentcode.com)*`
+            });
