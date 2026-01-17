@@ -62,7 +62,7 @@ jobs:
         run: |
           # Use Auggie's structured JSON output
           cat /tmp/failed-logs.txt | auggie --print --output-format json "
-          Analyze this CI failure and respond with a JSON object containing:
+          Analyze this CI failure and respond with ONLY a JSON object (no markdown, no explanation):
           {
             \"failure_type\": \"test_failure|type_error|lint_error|compilation_error|dependency_issue|infrastructure|flaky_test\",
             \"is_auto_fixable\": true or false,
@@ -78,19 +78,42 @@ jobs:
           - test_failure with assertion mismatch = medium risk, auto-fixable
           - compilation_error, dependency_issue = medium risk, may be auto-fixable
           - infrastructure, flaky_test = high risk, not auto-fixable
-          " > /tmp/analysis.json
+
+          IMPORTANT: Output ONLY the JSON object. No markdown code fences. No explanation.
+          " > /tmp/auggie-output.json
 
           # Debug: show raw output
-          echo "Raw analysis output:"
+          echo "Raw Auggie output:"
+          cat /tmp/auggie-output.json
+
+          # Extract the result field from Auggie's envelope, then extract JSON from within markdown fences
+          # Auggie outputs: {"type":"result","result":"...content with ```json\n{...}\n```..."}
+          RESULT_CONTENT=$(jq -r '.result // ""' /tmp/auggie-output.json)
+          echo "Result content:"
+          echo "$RESULT_CONTENT"
+
+          # Try to extract JSON from markdown code fences, or use the whole content if no fences
+          if echo "$RESULT_CONTENT" | grep -q '```json'; then
+            # Extract content between ```json and ```
+            echo "$RESULT_CONTENT" | sed -n '/```json/,/```/p' | sed '1d;$d' > /tmp/analysis.json
+          elif echo "$RESULT_CONTENT" | grep -q '```'; then
+            # Extract content between ``` and ```
+            echo "$RESULT_CONTENT" | sed -n '/```/,/```/p' | sed '1d;$d' > /tmp/analysis.json
+          else
+            # Try to find JSON object directly in the content
+            echo "$RESULT_CONTENT" | grep -o '{[^}]*}' | head -1 > /tmp/analysis.json
+          fi
+
+          echo "Extracted JSON:"
           cat /tmp/analysis.json
 
-          # Parse the JSON output
-          FAILURE_TYPE=$(jq -r '.failure_type // "unknown"' /tmp/analysis.json)
-          IS_AUTO_FIXABLE=$(jq -r '.is_auto_fixable // false' /tmp/analysis.json)
-          RISK_LEVEL=$(jq -r '.risk_level // "high"' /tmp/analysis.json)
-          ROOT_CAUSE=$(jq -r '.root_cause // "Unknown"' /tmp/analysis.json)
-          FILE_PATH=$(jq -r '.file_path // ""' /tmp/analysis.json)
-          SUGGESTED_FIX=$(jq -r '.suggested_fix // ""' /tmp/analysis.json)
+          # Parse the extracted JSON
+          FAILURE_TYPE=$(jq -r '.failure_type // "unknown"' /tmp/analysis.json 2>/dev/null || echo "unknown")
+          IS_AUTO_FIXABLE=$(jq -r '.is_auto_fixable // false' /tmp/analysis.json 2>/dev/null || echo "false")
+          RISK_LEVEL=$(jq -r '.risk_level // "high"' /tmp/analysis.json 2>/dev/null || echo "high")
+          ROOT_CAUSE=$(jq -r '.root_cause // "Unknown"' /tmp/analysis.json 2>/dev/null || echo "Unknown")
+          FILE_PATH=$(jq -r '.file_path // ""' /tmp/analysis.json 2>/dev/null || echo "")
+          SUGGESTED_FIX=$(jq -r '.suggested_fix // ""' /tmp/analysis.json 2>/dev/null || echo "")
 
           echo "failure_type=$FAILURE_TYPE" >> $GITHUB_OUTPUT
           echo "is_auto_fixable=$IS_AUTO_FIXABLE" >> $GITHUB_OUTPUT
